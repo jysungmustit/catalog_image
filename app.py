@@ -2,12 +2,9 @@
 import streamlit as st
 import pandas as pd
 import requests
-import cv2
 import os
-from PIL import Image
+from PIL import Image, ImageStat, ImageFilter
 from io import BytesIO
-import numpy as np
-import math
 
 # 전체 너비 레이아웃
 st.set_page_config(layout="wide")
@@ -57,22 +54,29 @@ def evaluate_clean_product_image(
 ):
     try:
         img_rgb = pil_img.convert("RGB")
-        img = np.array(img_rgb)
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        gray = pil_img.convert("L")
 
-        sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
-        _, stddev = cv2.meanStdDev(gray)
-        noise = stddev[0][0]
+        # Sharpness (전체 이미지의 variance of Laplacian 대체: 이미지의 edge variance로 간주)
+        edge_img = gray.filter(ImageFilter.FIND_EDGES)
+        sharpness = ImageStat.Stat(edge_img).var[0]
 
-        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
-        h, s, v = cv2.split(hsv)
-        color_diversity = np.std(h) + np.std(s) + np.std(v)
+        # Center sharpness
+        w, h = gray.size
+        center_box = gray.crop((w//4, h//4, 3*w//4, 3*h//4))
+        center_edge = center_box.filter(ImageFilter.FIND_EDGES)
+        center_sharpness = ImageStat.Stat(center_edge).var[0]
 
-        h_img, w_img = gray.shape
-        center_crop = gray[h_img // 4:3 * h_img // 4, w_img // 4:3 * w_img // 4]
-        center_sharpness = cv2.Laplacian(center_crop, cv2.CV_64F).var()
+        # Noise (standard deviation of grayscale)
+        noise = ImageStat.Stat(gray).stddev[0]
 
-        # 종합 점수 계산 (가중치 적용)
+        # Color diversity (R, G, B 각각의 stddev 합산)
+        r, g, b = img_rgb.split()
+        color_diversity = sum([
+            ImageStat.Stat(r).stddev[0],
+            ImageStat.Stat(g).stddev[0],
+            ImageStat.Stat(b).stddev[0],
+        ])
+
         raw_score = (
             weight_sharpness * sharpness +
             weight_center * center_sharpness -
